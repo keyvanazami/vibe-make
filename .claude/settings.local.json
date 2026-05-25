@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm *)",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(node -e \"const m = require\\('@google/genai'\\); console.log\\('exports:', Object.keys\\(m\\).slice\\(0,20\\)\\); console.log\\('version:', require\\('@google/genai/package.json'\\).version\\);\")",
+      "Bash(node -e \"const m = require\\('@google/genai'\\); console.log\\(typeof m.GoogleGenAI, Object.getOwnPropertyNames\\(m.GoogleGenAI.prototype\\).slice\\(0,20\\)\\);\")",
+      "Bash(node --input-type=module -e \"import\\('@google/genai'\\).then\\(m => { const c = new m.GoogleGenAI\\({apiKey:'x'}\\); console.log\\('client props:', Object.keys\\(c\\)\\); if\\(c.models\\) console.log\\('models methods:', Object.getOwnPropertyNames\\(Object.getPrototypeOf\\(c.models\\)\\)\\); }\\);\")",
+      "PowerShell(winget search OpenSCAD --accept-source-agreements 2>&1)",
+      "PowerShell(winget install --id OpenSCAD.OpenSCAD --exact --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1)",
+      "WebFetch(domain:openscad.org)",
+      "WebFetch(domain:files.openscad.org)",
+      "PowerShell($dest = \"$env:USERPROFILE\\\\tools\"; if \\(-not \\(Test-Path $dest\\)\\) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }; $zip = Join-Path $dest \"openscad-2025.07.20.zip\"; Write-Output \"Downloading to $zip...\"; $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri \"https://files.openscad.org/snapshots/OpenSCAD-2025.07.20-x86-64.zip\" -OutFile $zip -UseBasicParsing; \"Downloaded: $\\(\\(Get-Item $zip\\).Length / 1MB\\) MB\")",
+      "PowerShell($dest = \"$env:USERPROFILE\\\\tools\"; $zip = Join-Path $dest \"openscad-2025.07.20.zip\"; $extractRoot = Join-Path $dest \"openscad-extract\"; if \\(Test-Path $extractRoot\\) { Remove-Item $extractRoot -Recurse -Force }; New-Item -ItemType Directory -Path $extractRoot | Out-Null; Write-Output \"Extracting...\"; Expand-Archive -Path $zip -DestinationPath $extractRoot -Force; $exe = Get-ChildItem -Path $extractRoot -Filter \"openscad.exe\" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($exe\\) { Write-Output \"Found: $\\($exe.FullName\\)\"; $finalDir = Join-Path $dest \"openscad\"; if \\(Test-Path $finalDir\\) { Remove-Item $finalDir -Recurse -Force }; Move-Item -Path $exe.Directory.FullName -Destination $finalDir; Write-Output \"Installed to: $finalDir\\\\openscad.exe\"; Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item $zip -Force } else { Write-Output \"openscad.exe not found in zip!\" })",
+      "PowerShell(& \"$env:USERPROFILE\\\\tools\\\\openscad\\\\openscad.exe\" --version 2>&1)",
+      "PowerShell($exe = \"$env:USERPROFILE\\\\tools\\\\openscad\\\\openscad.exe\"; Test-Path $exe; & $exe --info 2>&1 | Select-Object -First 5)",
+      "PowerShell($exe = \"$env:USERPROFILE\\\\tools\\\\openscad\\\\openscad.exe\"; $scad = Join-Path $env:TEMP \"test.scad\"; $stl = Join-Path $env:TEMP \"test.stl\"; Set-Content -Path $scad -Value \"cube\\([10, 20, 5], center=true\\);\" -Encoding utf8; & $exe -o $stl $scad 2>&1; if \\(Test-Path $stl\\) { \"STL OK, size: $\\(\\(Get-Item $stl\\).Length\\) bytes\" } else { \"STL not produced\" }; Remove-Item $scad,$stl -ErrorAction SilentlyContinue)",
+      "PowerShell($exe = \"$env:USERPROFILE\\\\tools\\\\openscad\\\\openscad.exe\"; $scad = Join-Path $env:TEMP \"test.scad\"; $stl = Join-Path $env:TEMP \"test.stl\"; if \\(Test-Path $stl\\) { Remove-Item $stl }; [System.IO.File]::WriteAllText\\($scad, \"cube\\([10, 20, 5], center=true\\);\", [System.Text.UTF8Encoding]::new\\($false\\)\\); $stderr = Join-Path $env:TEMP \"scad.err\"; $proc = Start-Process -FilePath $exe -ArgumentList @\\(\"-o\", $stl, $scad\\) -NoNewWindow -Wait -PassThru -RedirectStandardError $stderr; \"ExitCode: $\\($proc.ExitCode\\)\"; \"STL exists: $\\(Test-Path $stl\\)\"; if \\(Test-Path $stl\\) { \"Size: $\\(\\(Get-Item $stl\\).Length\\) bytes\" }; \"STDERR:\"; Get-Content $stderr -ErrorAction SilentlyContinue; Remove-Item $scad,$stl,$stderr -ErrorAction SilentlyContinue)",
+      "PowerShell($stderr = Join-Path $env:TEMP \"v.err\"; $proc = Start-Process -FilePath \"C:\\\\Program Files\\\\OpenSCAD\\\\openscad.exe\" -ArgumentList \"--info\" -NoNewWindow -Wait -PassThru -RedirectStandardError $stderr; Get-Content $stderr -ErrorAction SilentlyContinue | Select-Object -First 2; Remove-Item $stderr -ErrorAction SilentlyContinue)",
+      "PowerShell(winget uninstall --id OpenSCAD.OpenSCAD --exact --silent --disable-interactivity 2>&1)",
+      "PowerShell(\"A exists: $\\(Test-Path 'C:\\\\Program Files\\\\OpenSCAD\\\\openscad.exe'\\)\"; \"B exists: $\\(Test-Path \"$env:USERPROFILE\\\\tools\\\\openscad\\\\openscad.exe\"\\)\")",
+      "Bash(gh auth *)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}
