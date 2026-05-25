@@ -22,7 +22,9 @@
       "PowerShell(\"A exists: $\\(Test-Path 'C:\\\\Program Files\\\\OpenSCAD\\\\openscad.exe'\\)\"; \"B exists: $\\(Test-Path \"$env:USERPROFILE\\\\tools\\\\openscad\\\\openscad.exe\"\\)\")",
       "Bash(gh auth *)",
       "Bash(git init *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'Initial commit: vibe-make 3D model generator *)",
+      "Bash(git commit -q -m ' *)"
     ]
   }
 }
