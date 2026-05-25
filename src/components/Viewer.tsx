@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls, GizmoHelper, GizmoViewport, Grid } from "@react-three/drei";
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
@@ -14,19 +14,147 @@ function base64ToArrayBuffer(b64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-function STLMesh({ stlBase64 }: { stlBase64: string }) {
-  const geometry = useMemo(() => {
+// Data emitted when the user clicks a surface. worldPoint is in the centered
+// viewer frame (for drawing the marker); modelPoint adds back the centering
+// offset so it matches the SCAD's own coordinate system (what we tell the LLM).
+export type PickData = {
+  worldPoint: [number, number, number];
+  modelPoint: [number, number, number];
+  normal: [number, number, number];
+};
+
+export type ViewerSelection = {
+  worldPoint: [number, number, number];
+  normal: [number, number, number];
+};
+
+function STLMesh({
+  stlBase64,
+  onPick,
+  onSize,
+  onBounds,
+}: {
+  stlBase64: string;
+  onPick?: (d: PickData | null) => void;
+  onSize?: (radius: number) => void;
+  onBounds?: (dims: [number, number, number]) => void;
+}) {
+  const { geometry, offset, radius, dims } = useMemo(() => {
     const loader = new STLLoader();
     const geom = loader.parse(base64ToArrayBuffer(stlBase64));
     geom.computeVertexNormals();
-    geom.center();
-    return geom;
+    geom.computeBoundingBox();
+    const bb = geom.boundingBox!;
+    const c = bb.getCenter(new THREE.Vector3());
+    const sz = bb.getSize(new THREE.Vector3());
+    geom.center(); // shift so the bounding-box center sits at the origin
+    geom.computeBoundingSphere();
+    const r = geom.boundingSphere?.radius ?? 50;
+    return { geometry: geom, offset: c, radius: r, dims: [sz.x, sz.y, sz.z] as [number, number, number] };
   }, [stlBase64]);
 
+  useEffect(() => { onSize?.(radius); }, [radius, onSize]);
+  useEffect(() => { onBounds?.(dims); }, [dims, onBounds]);
+
   return (
-    <mesh geometry={geometry} castShadow receiveShadow>
+    <mesh
+      geometry={geometry}
+      castShadow
+      receiveShadow
+      onClick={(e) => {
+        if (!onPick) return;
+        e.stopPropagation();
+        const p = e.point;
+        // The mesh has only a translation (no rotation/scale), so the geometry
+        // face normal already matches world/model orientation.
+        const n = e.face
+          ? e.face.normal.clone().normalize()
+          : new THREE.Vector3(0, 0, 1);
+        onPick({
+          worldPoint: [p.x, p.y, p.z],
+          modelPoint: [p.x + offset.x, p.y + offset.y, p.z + offset.z],
+          normal: [n.x, n.y, n.z],
+        });
+      }}
+      onPointerOver={() => { document.body.style.cursor = "crosshair"; }}
+      onPointerOut={() => { document.body.style.cursor = "default"; }}
+    >
       <meshStandardMaterial color="#9aa7ff" metalness={0.15} roughness={0.55} />
     </mesh>
+  );
+}
+
+const MARKER_COLOR = "#ff7a1a";
+
+function SelectionMarker({
+  selection,
+  modelRadius,
+}: {
+  selection: ViewerSelection;
+  modelRadius: number;
+}) {
+  const pos = useMemo(
+    () => new THREE.Vector3(...selection.worldPoint),
+    [selection.worldPoint]
+  );
+  // Orient a ring/disc so it lies flat against the picked surface (its axis,
+  // local +Z, aligned to the surface normal).
+  const quat = useMemo(() => {
+    const n = new THREE.Vector3(...selection.normal).normalize();
+    return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+  }, [selection.normal]);
+
+  // Scale every element to the model so the marker reads the same on a 10mm
+  // trinket or a 200mm bracket.
+  const s = Math.max(modelRadius, 6);
+  const ringR = s * 0.16;
+  const tube = s * 0.022;
+  const sphereR = s * 0.045;
+  const arrowLen = s * 0.5;
+
+  const arrow = useMemo(() => {
+    const dir = new THREE.Vector3(...selection.normal).normalize();
+    const a = new THREE.ArrowHelper(dir, pos, arrowLen, MARKER_COLOR, arrowLen * 0.32, arrowLen * 0.2);
+    (a.line.material as THREE.Material).depthTest = false;
+    (a.cone.material as THREE.Material).depthTest = false;
+    a.renderOrder = 1001;
+    return a;
+  }, [pos, selection.normal, arrowLen]);
+
+  // Gentle pulse to draw the eye.
+  const pulse = useRef<THREE.Group>(null);
+  useFrame(({ clock }) => {
+    if (pulse.current) {
+      pulse.current.scale.setScalar(1 + 0.16 * Math.sin(clock.elapsedTime * 4.5));
+    }
+  });
+
+  return (
+    <group>
+      <group position={pos} quaternion={quat}>
+        <group ref={pulse}>
+          <mesh renderOrder={1000}>
+            <torusGeometry args={[ringR, tube, 16, 64]} />
+            <meshBasicMaterial color={MARKER_COLOR} depthTest={false} transparent opacity={0.95} />
+          </mesh>
+          <mesh renderOrder={999}>
+            <circleGeometry args={[ringR, 64]} />
+            <meshBasicMaterial
+              color={MARKER_COLOR}
+              depthTest={false}
+              transparent
+              opacity={0.22}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+        </group>
+      </group>
+      <mesh position={pos} renderOrder={1002}>
+        <sphereGeometry args={[sphereR, 24, 24]} />
+        <meshBasicMaterial color="#ffd089" depthTest={false} />
+      </mesh>
+      <primitive object={arrow} />
+    </group>
   );
 }
 
@@ -52,11 +180,18 @@ export type ViewerHandle = { capturePng: () => string | null };
 export default function Viewer({
   stlBase64,
   onReady,
+  selection,
+  onPick,
+  onBounds,
 }: {
   stlBase64: string | null;
   onReady?: (handle: ViewerHandle) => void;
+  selection?: ViewerSelection | null;
+  onPick?: (d: PickData | null) => void;
+  onBounds?: (dims: [number, number, number]) => void;
 }) {
   const captureRef = useRef<(() => string | null) | null>(null);
+  const [modelRadius, setModelRadius] = useState(50);
 
   useEffect(() => {
     if (onReady) {
@@ -67,11 +202,12 @@ export default function Viewer({
   }, [onReady]);
 
   return (
-    <div className="w-full h-full bg-neutral-950 rounded-lg overflow-hidden border border-neutral-800">
+    <div className="w-full h-full bg-neutral-950 rounded-xl overflow-hidden border border-neutral-800/80 shadow-xl shadow-black/30">
       <Canvas
         shadows
         gl={{ preserveDrawingBuffer: true, antialias: true }}
         camera={{ position: [80, 80, 80], fov: 45, near: 0.1, far: 5000 }}
+        onPointerMissed={() => onPick?.(null)}
       >
         <color attach="background" args={["#0a0a0a"]} />
         <ambientLight intensity={0.45} />
@@ -98,8 +234,13 @@ export default function Viewer({
         />
 
         <Suspense fallback={null}>
-          {stlBase64 ? <STLMesh stlBase64={stlBase64} /> : null}
+          {stlBase64 ? (
+            <STLMesh stlBase64={stlBase64} onPick={onPick} onSize={setModelRadius} onBounds={onBounds} />
+          ) : null}
         </Suspense>
+        {selection ? (
+          <SelectionMarker selection={selection} modelRadius={modelRadius} />
+        ) : null}
 
         <OrbitControls makeDefault enableDamping />
         <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
