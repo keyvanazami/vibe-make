@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import dynamic from "next/dynamic";
-import type { ViewerHandle, PickData } from "@/components/Viewer";
+import type { ViewerHandle, PickData, DimLine } from "@/components/Viewer";
 import { parseScadParams, applyScadParams, type ScadParam } from "@/lib/scadParams";
 import { MANUAL_OPS, buildManualScad, type ManualOpId } from "@/lib/manualOps";
 import WorkingIndicator from "@/components/WorkingIndicator";
@@ -103,6 +103,84 @@ function editChanged(p: ScadParam, edit: string, unit: DisplayUnit): boolean {
   const arr = Array.isArray(v) ? v : [v];
   // Tolerance absorbs unit round-trip rounding so untouched fields aren't flagged.
   return arr.some((n, i) => Math.abs(n - p.value[i]) > 1e-3);
+}
+
+// --- Dimension highlighting (which axis does a parameter control) ----------
+
+type DimAxis = { axis: number; value: number }; // value in mm, for the label
+
+// Parse the bounding-box size (mm) from a base64 STL (handles ASCII + binary).
+function stlSize(b64: string): [number, number, number] | null {
+  try {
+    const bin = atob(b64);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    const consider = (x: number, y: number, z: number) => {
+      const v = [x, y, z];
+      for (let a = 0; a < 3; a++) {
+        if (v[a] < min[a]) min[a] = v[a];
+        if (v[a] > max[a]) max[a] = v[a];
+      }
+    };
+
+    const isBinary = len >= 84 && 84 + new DataView(bytes.buffer).getUint32(80, true) * 50 === len;
+    if (isBinary) {
+      const dv = new DataView(bytes.buffer);
+      const tris = dv.getUint32(80, true);
+      let o = 84;
+      for (let t = 0; t < tris; t++) {
+        o += 12; // skip normal
+        for (let v = 0; v < 3; v++) {
+          consider(dv.getFloat32(o, true), dv.getFloat32(o + 4, true), dv.getFloat32(o + 8, true));
+          o += 12;
+        }
+        o += 2; // attribute byte count
+      }
+    } else {
+      const re = /vertex\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(bin))) consider(parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]));
+    }
+    if (!Number.isFinite(min[0])) return null;
+    return [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+  } catch {
+    return null;
+  }
+}
+
+// Instant guess: map a length param to bounding-box axis/axes by name + value.
+function guessAxes(p: ScadParam, dims: [number, number, number]): DimAxis[] {
+  if (p.unit !== "length") return [];
+  const close = (val: number, ext: number) => Math.abs(val - ext) <= Math.max(0.5, ext * 0.03);
+
+  // Vectors: component i maps to axis i when it matches that extent.
+  if (p.isVector && p.value.length === 3) {
+    const out: DimAxis[] = [];
+    for (let a = 0; a < 3; a++) if (close(p.value[a], dims[a])) out.push({ axis: a, value: p.value[a] });
+    return out;
+  }
+
+  const v = p.value[0];
+  const s = `${p.name} ${p.label}`.toLowerCase();
+  const named: number =
+    /(height|tall|\bht\b|\bz\b)/.test(s) ? 2 :
+    /(width|wide|\bx\b)/.test(s) ? 0 :
+    /(depth|length|long|\by\b)/.test(s) ? 1 :
+    -1;
+
+  if (named >= 0 && close(v, dims[named])) return [{ axis: named, value: v }];
+  // Diameter/across: match the value to whichever horizontal extent fits.
+  if (/(diam|\bdia\b|\bod\b|\bid\b|across|bore)/.test(s)) {
+    if (close(v, dims[0])) return [{ axis: 0, value: v }];
+    if (close(v, dims[1])) return [{ axis: 1, value: v }];
+  }
+  // Fallback: value equals exactly one extent → highlight it.
+  const matches = [0, 1, 2].filter((a) => close(v, dims[a]));
+  if (matches.length === 1) return [{ axis: matches[0], value: v }];
+  return [];
 }
 
 // Turn a project name into a filesystem-safe export filename base.
@@ -334,6 +412,8 @@ export default function Home() {
   const [modOpId, setModOpId] = useState<ManualOpId>("cut_cyl");
   const [modFields, setModFields] = useState<Record<string, string>>({});
   const [modAlign, setModAlign] = useState(true);
+  const [highlightParam, setHighlightParam] = useState<string | null>(null);
+  const [dimAxes, setDimAxes] = useState<Record<string, DimAxis[]>>({});
   const viewerRef = useRef<ViewerHandle | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const unit = settings.unit;
@@ -360,6 +440,9 @@ export default function Home() {
   // A pick refers to a specific geometry; once the model re-renders it's stale.
   useEffect(() => { setSelection(null); }, [session.stlBase64]);
   useEffect(() => { if (!session.stlBase64) setModelDims(null); }, [session.stlBase64]);
+
+  // Resolved dimension cache and focus are tied to the current geometry.
+  useEffect(() => { setDimAxes({}); setHighlightParam(null); }, [session.currentScad]);
 
   const onPick = useCallback((d: PickData | null) => {
     setSelection(d ? { ...d, label: describeNormal(d.normal) } : null);
@@ -454,6 +537,80 @@ export default function Home() {
       setBusy(false);
     }
   }, [session.currentScad, params, paramEdits, busy, unit]);
+
+  // Resolve which axis the focused parameter controls: instant name/value guess
+  // first, then (if inconclusive) probe by nudging the value and re-rendering to
+  // see which way the bounding box grows. Results are cached per parameter.
+  useEffect(() => {
+    if (!highlightParam || !modelDims || !session.currentScad) return;
+    if (highlightParam in dimAxes) return; // already resolved
+    const p = params.find((x) => x.name === highlightParam);
+    if (!p || p.unit !== "length") {
+      setDimAxes((c) => ({ ...c, [highlightParam]: [] }));
+      return;
+    }
+
+    const instant = guessAxes(p, modelDims);
+    if (instant.length) {
+      setDimAxes((c) => ({ ...c, [p.name]: instant }));
+      return;
+    }
+    if (p.isVector) {
+      setDimAxes((c) => ({ ...c, [p.name]: [] })); // probing vectors is ambiguous
+      return;
+    }
+
+    // Probe: bump the value, render, compare bounding box per axis.
+    let cancelled = false;
+    const scad = session.currentScad;
+    const baseDims = modelDims;
+    const delta = Math.max(Math.abs(p.value[0]) * 0.15, 3);
+    const probe = setTimeout(async () => {
+      try {
+        const newScad = applyScadParams(scad, { [p.name]: p.value[0] + delta });
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scad: newScad }),
+        });
+        const data = await res.json();
+        const size = res.ok ? stlSize(data.stlBase64) : null;
+        let result: DimAxis[] = [];
+        if (size) {
+          const deltas = [0, 1, 2].map((a) => Math.abs(size[a] - baseDims[a]));
+          const best = deltas.indexOf(Math.max(...deltas));
+          if (deltas[best] > 0.3) result = [{ axis: best, value: p.value[0] }];
+        }
+        if (!cancelled) setDimAxes((c) => ({ ...c, [p.name]: result }));
+      } catch {
+        if (!cancelled) setDimAxes((c) => ({ ...c, [p.name]: [] }));
+      }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(probe); };
+  }, [highlightParam, modelDims, params, session.currentScad, dimAxes]);
+
+  // Build the dimension annotation lines for the currently-highlighted param.
+  const dimLines = useMemo<DimLine[]>(() => {
+    if (!highlightParam || !modelDims) return [];
+    const p = params.find((x) => x.name === highlightParam);
+    const axes = dimAxes[highlightParam];
+    if (!p || !axes || !axes.length) return [];
+    const half = modelDims.map((d) => d / 2) as [number, number, number];
+    const off = Math.max(...modelDims) * 0.12 + 3;
+    return axes.map(({ axis, value }) => {
+      const o1 = (axis + 1) % 3;
+      const o2 = (axis + 2) % 3;
+      const base = [0, 0, 0];
+      base[o1] = half[o1] + off;
+      base[o2] = half[o2] + off;
+      const from = [...base] as [number, number, number];
+      const to = [...base] as [number, number, number];
+      from[axis] = -half[axis];
+      to[axis] = half[axis];
+      const label = `${fmtNum(fromMM(p, value, unit))} ${unitSuffix(p, unit)}`;
+      return { from, to, label };
+    });
+  }, [highlightParam, dimAxes, modelDims, params, unit]);
 
   // Shared generation path used by both the prompt box and the split action.
   // Captures the current render (with any selection marker) and posts to the API.
@@ -1151,6 +1308,7 @@ export default function Home() {
                 selection={selection ? { worldPoint: selection.worldPoint, normal: selection.normal } : null}
                 onPick={onPick}
                 onBounds={setModelDims}
+                dimensions={dimLines}
               />
             </div>
             {showParams && session.currentScad && (
@@ -1203,6 +1361,7 @@ export default function Home() {
                               step={p.isVector ? undefined : "any"}
                               value={edit}
                               placeholder={p.isVector ? "e.g. 120, 80, 50" : undefined}
+                              onFocus={() => setHighlightParam(p.name)}
                               onChange={(e) =>
                                 setParamEdits((m) => ({ ...m, [p.name]: e.target.value }))
                               }

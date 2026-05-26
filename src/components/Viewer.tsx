@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useThree, useFrame } from "@react-three/fiber";
-import { OrbitControls, GizmoHelper, GizmoViewport, Grid } from "@react-three/drei";
+import { OrbitControls, GizmoHelper, GizmoViewport, Grid, Line, Html } from "@react-three/drei";
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
@@ -27,6 +27,53 @@ export type ViewerSelection = {
   worldPoint: [number, number, number];
   normal: [number, number, number];
 };
+
+// A dimension annotation drawn alongside the model (centered viewer frame).
+export type DimLine = {
+  from: [number, number, number];
+  to: [number, number, number];
+  label: string;
+};
+
+const DIM_COLOR = "#22d3ee";
+
+function DimensionLines({ lines }: { lines: DimLine[] }) {
+  return (
+    <>
+      {lines.map((d, i) => {
+        const mid: [number, number, number] = [
+          (d.from[0] + d.to[0]) / 2,
+          (d.from[1] + d.to[1]) / 2,
+          (d.from[2] + d.to[2]) / 2,
+        ];
+        return (
+          <group key={i}>
+            <Line points={[d.from, d.to]} color={DIM_COLOR} lineWidth={2.5} depthTest={false} renderOrder={1100} />
+            {/* DOM label avoids font/suspense issues and stays crisp; it is an
+                overlay, so it is not baked into capturePng (preview/export). */}
+            <Html position={mid} center zIndexRange={[100, 0]} pointerEvents="none">
+              <div
+                style={{
+                  background: "rgba(10,10,10,0.8)",
+                  color: DIM_COLOR,
+                  border: `1px solid ${DIM_COLOR}`,
+                  borderRadius: 6,
+                  padding: "1px 6px",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  userSelect: "none",
+                }}
+              >
+                {d.label}
+              </div>
+            </Html>
+          </group>
+        );
+      })}
+    </>
+  );
+}
 
 function STLMesh({
   stlBase64,
@@ -183,12 +230,14 @@ export default function Viewer({
   selection,
   onPick,
   onBounds,
+  dimensions,
 }: {
   stlBase64: string | null;
   onReady?: (handle: ViewerHandle) => void;
   selection?: ViewerSelection | null;
   onPick?: (d: PickData | null) => void;
   onBounds?: (dims: [number, number, number]) => void;
+  dimensions?: DimLine[];
 }) {
   const captureRef = useRef<(() => string | null) | null>(null);
   const [modelRadius, setModelRadius] = useState(50);
@@ -240,6 +289,9 @@ export default function Viewer({
         </Suspense>
         {selection ? (
           <SelectionMarker selection={selection} modelRadius={modelRadius} />
+        ) : null}
+        {dimensions && dimensions.length > 0 ? (
+          <DimensionLines lines={dimensions} />
         ) : null}
 
         <OrbitControls makeDefault enableDamping />
