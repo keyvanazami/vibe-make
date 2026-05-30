@@ -1,6 +1,6 @@
 # vibe-make
 
-Describe a 3D object in plain English. AI generates an OpenSCAD script, renders a 3D preview, and lets you refine it with follow-up prompts. Export to STL, OBJ, 3MF, AMF, a STEP solid (for Fusion 360 / CAD), or the parametric `.scad`.
+Describe a 3D object in plain English. AI generates an OpenSCAD script, renders a 3D preview, and lets you refine it with follow-up prompts. You can also start from an existing **STL or STEP** part and bolt features onto it via prompts. Export to STL, OBJ, 3MF, AMF, a STEP solid (for Fusion 360 / CAD), or the parametric `.scad`.
 
 ## Stack
 
@@ -46,6 +46,7 @@ Open http://localhost:3000
 | `OPENSCAD_BIN`   | no  | Full path to the `openscad` executable. Defaults to Windows install path on Windows, otherwise `openscad` on PATH |
 | `PYTHON_BIN`     | no  | Python executable for STEP export. Defaults to `python` (Windows) / `python3` |
 | `STEP_FN`        | no  | Facet count for curves when converting to STEP. Defaults to `128` (higher = smoother curves, larger/slower files) |
+| `STEP_IMPORT_DEFL` | no | Linear tessellation deflection (mm) when importing STEP. Defaults to `0.1` (smaller = more triangles, larger = coarser mesh) |
 
 ## How the loop works
 
@@ -56,6 +57,21 @@ Open http://localhost:3000
 5. Use the **Export** menu to download a mesh (STL/OBJ/3MF/AMF), a STEP solid, or the `.scad` source.
 
 STEP export converts the mesh to a B-rep solid via OpenCASCADE: coplanar faces are merged so flat surfaces stay clean and editable in CAD. Curved surfaces come through faceted (controlled by `STEP_FN`), and there's no parametric feature tree — for that, the `.scad` is the editable source.
+
+## Importing an STL or STEP as a starting point
+
+**Project → Import STL or STEP…** loads an existing part as the base of a new project. The mesh is tessellated (STEP via OpenCASCADE, STL parsed directly) and embedded into the SCAD as an opaque `module base() { polyhedron(...); }`. From there, prompts add or remove features around it:
+
+> "Drill a 5 mm hole through the center."
+> "Add a 3 mm chamfer-style flange on the top face."
+
+The LLM is instructed to never modify the polyhedron data — only `union` / `difference` with `base()`. The mesh travels inside the SCAD itself, so projects stay self-contained (no per-project server-side files).
+
+Caveats worth knowing:
+
+- The base is a **frozen mesh**, not a CAD body. Edges and curved surfaces don't exist as entities, so you can't "fillet that edge" or "shell the part" — the LLM can only add or subtract new geometry around it.
+- STEP import requires the Python prerequisite (`pip install -r requirements.txt`); STL import does not.
+- Imports above ~50 000 triangles are refused (the embedded polyhedron would push localStorage limits). Decimate in the source tool, or re-export STEP with a coarser tessellation, and try again.
 
 ## Notes
 

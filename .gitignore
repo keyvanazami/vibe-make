@@ -6,4 +6,5 @@ out/
 *.log
 .DS_Store
 tmp/
+.tmp/
 *.tsbuildinfo

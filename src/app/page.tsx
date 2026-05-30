@@ -416,6 +416,8 @@ export default function Home() {
   const [dimAxes, setDimAxes] = useState<Record<string, DimAxis[]>>({});
   const viewerRef = useRef<ViewerHandle | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
   const unit = settings.unit;
 
   const onPickImage = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -823,6 +825,49 @@ export default function Home() {
     setError(null);
   }, []);
 
+  // Upload an STL or STEP file, wrap it as a polyhedron base() module, and
+  // start a fresh (unsaved) project so the user can prompt modifications.
+  const onImportPart = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-import of the same file
+    if (!file) return;
+    if (session.currentScad && !confirm("Replace the current model with an imported file? Unsaved work will be cleared.")) return;
+    setImporting(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/import-part", { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || `Import failed (${res.status})`);
+        if (data.scad) {
+          // Server returned SCAD but render failed — still load it so the user can inspect.
+          setSession({ ...EMPTY, currentScad: data.scad });
+        }
+        return;
+      }
+      const seedTurn: ChatTurn = {
+        role: "assistant",
+        text: `Imported ${data.name} (${data.triCount.toLocaleString()} triangles) as the base part.`,
+        status: "ok",
+      };
+      setSession({
+        history: [seedTurn],
+        currentScad: data.scad,
+        stlBase64: data.stlBase64,
+        projectId: null,
+        tokensTotal: 0,
+        tokensLast: null,
+      });
+      setPrompt("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Import error");
+    } finally {
+      setImporting(false);
+    }
+  }, [session.currentScad]);
+
   // Save the current prompts + SCAD as a named project. Updates the loaded
   // project in place if there is one; otherwise asks for a name and creates it.
   const saveProject = useCallback(() => {
@@ -1127,6 +1172,9 @@ export default function Home() {
               {currentProject ? "Save" : "Save as…"}
             </MenuItem>
             <MenuItem onClick={onNewProject}>New project</MenuItem>
+            <MenuItem onClick={() => importInputRef.current?.click()} disabled={importing}>
+              {importing ? "Importing…" : "Import STL or STEP…"}
+            </MenuItem>
             <div className="my-1 border-t border-neutral-800" />
             <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-neutral-500">
               Open project
@@ -1191,6 +1239,7 @@ export default function Home() {
               ))}
             {busy && <WorkingIndicator />}
             {exporting && <WorkingIndicator label={`Exporting ${exporting.toUpperCase()}…`} />}
+            {importing && <WorkingIndicator label="Importing part…" />}
             {error && (
               <div className="text-sm rounded-lg px-3 py-2 bg-red-950/40 border border-red-900/70 text-red-200 whitespace-pre-wrap">
                 {error}
@@ -1295,6 +1344,13 @@ export default function Home() {
               accept="image/*"
               className="hidden"
               onChange={onPickImage}
+            />
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".stl,.step,.stp,model/stl,model/step"
+              className="hidden"
+              onChange={onImportPart}
             />
           </div>
         </aside>

@@ -24,6 +24,11 @@ Rules:
 - The user may include a "[Surface reference]" note with a coordinate, a face label (top/bottom/left/right/front/back), and an outward normal — and a bright ORANGE marker drawn at that point in the screenshot. This means their instruction ("make this thicker", "add a hole here", etc.) applies to that specific surface/location. Use the coordinate and normal to determine which part of the geometry and which parameters are responsible for that surface, and change those. Do not relocate or restructure the rest of the model.
 - Never use external libraries (no use<>/include<>). Stick to built-in OpenSCAD primitives and operations.
 - Always author the script in millimeters, regardless of how the user phrases dimensions. If the user gives a dimension in inches, convert to mm (1 in = 25.4 mm) and use the mm value as the parameter.
+- IMPORTED BASE: if the current script contains a \`module base() { polyhedron(...); }\` (typically marked with "BEGIN IMPORTED BASE" / "END IMPORTED BASE"), that module is an opaque imported mesh from an STL or STEP file. Treat it as read-only geometry:
+  - NEVER edit, regenerate, or omit the polyhedron's \`points\` or \`faces\` arrays — copy that block through verbatim.
+  - Build all modifications around \`base()\` using union / difference / intersection. To add a feature: \`union() { base(); ...new_geometry... }\`. To remove material: \`difference() { base(); ...cutter... }\`.
+  - You may freely add named parameters at the top of the file for the new features. The base mesh has no parameters; do not invent ones to describe its shape.
+  - The base is pre-centered on the XY plane (z=0 at its lowest point). Position new features relative to that, not relative to absolute coordinates from the original file.
 - If the user asks to SPLIT the model for 3D printing within a given build volume: cut the model into the fewest parts such that each part fits within the stated X×Y×Z mm plate, slicing along sensible flat planes. Lay the resulting parts out separately on the XY plane, spaced apart so they do not overlap and each rests flat for printing. Add simple registration features on the mating faces (alignment pegs with matching holes, or a stepped/lap joint) so the parts can be aligned and glued. Keep the script parametric and preserve existing parameter names where possible.
 `;
 
