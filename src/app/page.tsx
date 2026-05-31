@@ -15,6 +15,7 @@ import type { ViewerHandle, PickData, DimLine } from "@/components/Viewer";
 import { parseScadParams, applyScadParams, type ScadParam } from "@/lib/scadParams";
 import { MANUAL_OPS, buildManualScad, type ManualOpId } from "@/lib/manualOps";
 import WorkingIndicator from "@/components/WorkingIndicator";
+import LogPanel from "@/components/LogPanel";
 import {
   listProjects,
   upsertProject,
@@ -418,6 +419,7 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
   const unit = settings.unit;
 
   const onPickImage = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1175,6 +1177,7 @@ export default function Home() {
             <MenuItem onClick={() => importInputRef.current?.click()} disabled={importing}>
               {importing ? "Importing…" : "Import STL or STEP…"}
             </MenuItem>
+            <MenuItem onClick={() => setShowLogs(true)}>Server logs…</MenuItem>
             <div className="my-1 border-t border-neutral-800" />
             <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-neutral-500">
               Open project
@@ -1490,6 +1493,7 @@ export default function Home() {
           </span>
         </span>
       </footer>
+      {showLogs && <LogPanel onClose={() => setShowLogs(false)} />}
     </main>
   );
 }
