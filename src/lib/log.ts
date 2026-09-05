@@ -16,7 +16,9 @@
 import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-const LOG_DIR = join(process.cwd(), ".tmp");
+// Overridable so deployments can point at a writable volume (the container
+// image ships a read-only app dir; Cloud Run gives us /tmp).
+const LOG_DIR = process.env.VIBE_LOG_DIR?.trim() || join(process.cwd(), ".tmp");
 const LOG_FILE = join(LOG_DIR, "vibe-make.log");
 const MAX_BYTES = 5 * 1024 * 1024;
 const ROTATE_EVERY = 100;

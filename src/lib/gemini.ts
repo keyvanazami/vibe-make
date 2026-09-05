@@ -64,7 +64,7 @@ export async function generateScad(opts: {
   history: ChatTurn[];
   model?: string;
 }): Promise<{ scad: string; usage: TokenUsage }> {
-  const model = opts.model || process.env.GEMINI_MODEL || "gemini-3.5-flash";
+  const model = opts.model || process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
   const contents: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [];
 

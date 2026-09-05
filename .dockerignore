@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.tmp
+tmp
+out
+.env
+.env.local
+*.log
+*.tsbuildinfo
+.claude
+.DS_Store
+README.md
