@@ -35,7 +35,9 @@ Rules:
 let _client: GoogleGenAI | null = null;
 function client(): GoogleGenAI {
   if (!_client) {
-    const apiKey = process.env.GEMINI_API_KEY;
+    // Trim: secret stores and .env files routinely pick up a trailing newline,
+    // and Gemini rejects the key outright rather than saying why.
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set. Add it to .env.local.");
     _client = new GoogleGenAI({ apiKey });
   }
