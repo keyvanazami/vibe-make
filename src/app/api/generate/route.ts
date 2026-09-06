@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateScad, type ChatTurn } from "@/lib/gemini";
+import { generateScad, type ChatTurn, type RetryNote } from "@/lib/gemini";
 import { scadTo } from "@/lib/openscad";
 import { startLog, finishLog } from "@/lib/log";
 
@@ -47,16 +47,28 @@ export async function POST(req: NextRequest) {
 
   let scad: string;
   let usage;
-  let retries;
+  const retries: RetryNote[] = [];
+  // Absorbed rate limits belong in the log whether or not we ended up
+  // succeeding: "failed after 4 attempts" and "failed immediately" are very
+  // different signals when reading the panel.
+  const noteRetries = () => {
+    if (!retries.length) return;
+    log.meta.retries = retries.length;
+    log.meta.retryDetail = retries
+      .map((r) => `#${r.attempt} ${r.status ?? "?"} +${r.delayMs}ms`)
+      .join(", ");
+  };
   try {
-    ({ scad, usage, retries } = await generateScad({
+    ({ scad, usage } = await generateScad({
       prompt: body.prompt,
       currentScad: body.currentScad ?? null,
       previewImageBase64: body.previewImageBase64 ?? null,
       referenceImage: body.referenceImageDataUrl ? parseDataUrl(body.referenceImageDataUrl) : null,
       history: body.history ?? [],
+      retryLog: retries,
     }));
   } catch (err) {
+    noteRetries();
     finishLog(log, 500, err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Gemini call failed" },
@@ -64,13 +76,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Surface absorbed rate limits: the request succeeded, but knowing it took
-  // three attempts is the difference between "fine" and "about to start
-  // failing" when reading the log panel.
-  if (retries.length) {
-    log.meta.retries = retries.length;
-    log.meta.retryDetail = retries.map((r) => `#${r.attempt} ${r.status ?? "?"} +${r.delayMs}ms`).join(", ");
-  }
+  noteRetries();
 
   log.meta.outputScadLen = scad.length;
   log.meta.tokensTotal = usage.totalTokens;

@@ -149,6 +149,10 @@ export async function generateScad(opts: {
   referenceImage?: { mimeType: string; data: string } | null;
   history: ChatTurn[];
   model?: string;
+  // Populated in place. Owned by the caller so the attempts made are still
+  // readable when the call ultimately throws — which is exactly when knowing
+  // we retried four times matters most.
+  retryLog?: RetryNote[];
 }): Promise<{ scad: string; usage: TokenUsage; retries: RetryNote[] }> {
   const model = opts.model || process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
@@ -185,7 +189,7 @@ export async function generateScad(opts: {
 
   contents.push({ role: "user", parts });
 
-  const retries: RetryNote[] = [];
+  const retries = opts.retryLog ?? [];
   const response = await withRetry(
     () =>
       client().models.generateContent({
