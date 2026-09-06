@@ -43,12 +43,13 @@ export async function POST(req: NextRequest) {
   log.meta.historyTurns = body.history?.length ?? 0;
   log.meta.hasPreviewImage = !!body.previewImageBase64;
   log.meta.hasReferenceImage = !!body.referenceImageDataUrl;
-  log.meta.model = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+  log.meta.model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
   let scad: string;
   let usage;
+  let retries;
   try {
-    ({ scad, usage } = await generateScad({
+    ({ scad, usage, retries } = await generateScad({
       prompt: body.prompt,
       currentScad: body.currentScad ?? null,
       previewImageBase64: body.previewImageBase64 ?? null,
@@ -61,6 +62,14 @@ export async function POST(req: NextRequest) {
       { error: err instanceof Error ? err.message : "Gemini call failed" },
       { status: 500 }
     );
+  }
+
+  // Surface absorbed rate limits: the request succeeded, but knowing it took
+  // three attempts is the difference between "fine" and "about to start
+  // failing" when reading the log panel.
+  if (retries.length) {
+    log.meta.retries = retries.length;
+    log.meta.retryDetail = retries.map((r) => `#${r.attempt} ${r.status ?? "?"} +${r.delayMs}ms`).join(", ");
   }
 
   log.meta.outputScadLen = scad.length;

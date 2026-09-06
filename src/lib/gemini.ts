@@ -58,6 +58,90 @@ export type TokenUsage = {
   totalTokens: number;
 };
 
+// --- Transient-failure handling -------------------------------------------
+//
+// Gemini reports capacity problems as 429 (rate limited) and 503 ("high
+// demand"), both of which typically clear within seconds. Giving up on the
+// first one throws away a request the user is actively waiting on, so we retry
+// those in place rather than surfacing a failure they have to resubmit.
+//
+// Permanent failures must NOT be retried: a bad key, an unknown model or a
+// malformed request will fail identically every time, and retrying only makes
+// the user wait longer for the same error.
+
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 4;
+const BASE_DELAY_MS = 800;
+const MAX_DELAY_MS = 8_000;
+// Keep the whole retry sequence inside the request budget: a caller waiting
+// much longer than this would rather see the error and decide for themselves.
+const RETRY_BUDGET_MS = 45_000;
+
+function statusOf(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as Record<string, unknown>;
+  if (typeof e.status === "number") return e.status;
+  if (typeof e.statusCode === "number") return e.statusCode;
+  // The SDK often leaves the upstream status only in the serialized body.
+  const body = `${(e as { message?: string }).message ?? ""} ${safeJson(e.cause)}`;
+  const m = body.match(/"code"\s*:\s*(\d{3})/);
+  return m ? Number(m[1]) : undefined;
+}
+
+function safeJson(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  try { return typeof v === "string" ? v : JSON.stringify(v); } catch { return String(v); }
+}
+
+function isRetryable(err: unknown): boolean {
+  const status = statusOf(err);
+  if (status !== undefined) return RETRYABLE_STATUS.has(status);
+  // No status at all usually means the connection itself failed.
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  return /unavailable|overload|high demand|rate.?limit|resource.?exhausted|timeout|etimedout|econnreset|socket hang up|fetch failed/.test(msg);
+}
+
+// Google attaches a RetryInfo detail ("retryDelay":"23s") when it knows how
+// long the caller should wait. Prefer it over our own guess, but cap it — an
+// honest 60s hint is still longer than anyone wants to sit on a spinner.
+function serverHintMs(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as Record<string, unknown>;
+  const body = `${(e as { message?: string }).message ?? ""} ${safeJson(e.cause)}`;
+  const m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+  if (!m) return undefined;
+  return Math.min(Number(m[1]) * 1000, MAX_DELAY_MS);
+}
+
+function backoffMs(attempt: number): number {
+  const exp = Math.min(BASE_DELAY_MS * 2 ** (attempt - 1), MAX_DELAY_MS);
+  // Jitter keeps concurrent clients from retrying in lockstep.
+  return exp + Math.random() * 400;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export type RetryNote = { attempt: number; delayMs: number; status?: number };
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  notes: RetryNote[]
+): Promise<T> {
+  const startedAt = Date.now();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const last = attempt >= MAX_ATTEMPTS;
+      if (last || !isRetryable(err)) throw err;
+      const wait = serverHintMs(err) ?? backoffMs(attempt);
+      if (Date.now() - startedAt + wait > RETRY_BUDGET_MS) throw err;
+      notes.push({ attempt, delayMs: Math.round(wait), status: statusOf(err) });
+      await sleep(wait);
+    }
+  }
+}
+
 export async function generateScad(opts: {
   prompt: string;
   currentScad: string | null;
@@ -65,7 +149,7 @@ export async function generateScad(opts: {
   referenceImage?: { mimeType: string; data: string } | null;
   history: ChatTurn[];
   model?: string;
-}): Promise<{ scad: string; usage: TokenUsage }> {
+}): Promise<{ scad: string; usage: TokenUsage; retries: RetryNote[] }> {
   const model = opts.model || process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
   const contents: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [];
@@ -101,11 +185,16 @@ export async function generateScad(opts: {
 
   contents.push({ role: "user", parts });
 
-  const response = await client().models.generateContent({
-    model,
-    contents,
-    config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.4 },
-  });
+  const retries: RetryNote[] = [];
+  const response = await withRetry(
+    () =>
+      client().models.generateContent({
+        model,
+        contents,
+        config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.4 },
+      }),
+    retries
+  );
 
   const text = response.text ?? "";
   if (!text.trim()) throw new Error("Gemini returned an empty response.");
@@ -116,5 +205,5 @@ export async function generateScad(opts: {
     outputTokens: um?.candidatesTokenCount ?? 0,
     totalTokens: um?.totalTokenCount ?? 0,
   };
-  return { scad: stripCodeFences(text), usage };
+  return { scad: stripCodeFences(text), usage, retries };
 }
